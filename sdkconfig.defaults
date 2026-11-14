@@ -1,0 +1,18 @@
+# Base firmware settings. The first build turns them into sdkconfig (not in
+# git). Changed something here — delete sdkconfig: values already in it take
+# precedence over this file (`idf.py fullclean` does not touch it).
+
+CONFIG_IDF_TARGET="esp32c3"
+
+# SuperMini and DevKitM-1 have 4 MB flash (IDF builds for 2 MB by default)
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Own partition table: 1.75 MB firmware (with Wi-Fi) and a "log" partition for the journal
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Console (printf and command input) over the built-in USB, USB Serial/JTAG.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# FreeRTOS tick 1 ms: vTaskDelay(1) is 1 ms, not 10.
+CONFIG_FREERTOS_HZ=1000

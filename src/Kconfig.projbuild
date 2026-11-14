@@ -1,0 +1,86 @@
+menu "pillscale"
+
+    # Pins: see docs/hardware.md. Strapping pins 2, 8, 9 must not be used.
+
+    config PILLSCALE_PIN_HX711_DOUT
+        int "HX711 DOUT GPIO"
+        range 0 21
+        default 4
+
+    config PILLSCALE_PIN_HX711_SCK
+        int "HX711 SCK GPIO"
+        range 0 21
+        default 5
+
+    config PILLSCALE_WIFI_AP
+        bool "Wi-Fi access point + web page (journal on the phone)"
+        default y
+        help
+            The scale runs its own Wi-Fi network; http://192.168.4.1 shows the
+            state and the journal. No internet needed. See docs/api.md,
+            "Веб-страница".
+
+    config PILLSCALE_AP_SSID
+        string "Wi-Fi network name"
+        depends on PILLSCALE_WIFI_AP
+        default "pillscale"
+
+    config PILLSCALE_AP_PASSWORD
+        string "Wi-Fi password (8+ chars, empty = open network)"
+        depends on PILLSCALE_WIFI_AP
+        default "pillscale"
+
+    config PILLSCALE_NTP_SERVER
+        string "NTP server (home network only; empty = no NTP)"
+        depends on PILLSCALE_WIFI_AP
+        default "pool.ntp.org"
+        help
+            When connected to the home network the time is taken from this
+            server, so after a power loss it comes back by itself. In own-AP
+            mode there is no internet and the page still sends the time.
+
+    config PILLSCALE_WIFI_TX_POWER
+        int "Wi-Fi TX power, 0.25 dBm units (8..84; 34 = 8.5 dBm, 80 = 20 dBm)"
+        depends on PILLSCALE_WIFI_AP
+        range 8 84
+        default 34
+        help
+            The ESP32-C3 SuperMini has a poorly matched antenna: at full power
+            the signal is distorted and the phone does not see the network.
+            8.5 dBm covers a room, and the radio next to the load-cell bridge
+            makes less noise. The DevKitM-1 works at 80 too.
+
+    config PILLSCALE_PIN_LED
+        int "LED GPIO, 'time known' indicator (-1 = none)"
+        range -1 21
+        default 3
+        help
+            The LED blinks while the scale does not know the time (the schedule
+            cannot fire) and stays on once the time is set. On the SuperMini
+            the built-in LED is GPIO8 and is active low.
+
+    config PILLSCALE_LED_ACTIVE_LOW
+        bool "LED is active low"
+        depends on PILLSCALE_PIN_LED >= 0
+        default n
+
+    config PILLSCALE_PIN_BUZZER
+        int "Buzzer GPIO (-1 = none)"
+        range -1 21
+        default 1
+        help
+            Buzzer through an n-channel MOSFET (docs/hardware.md). Test with the
+            beep command.
+
+    config PILLSCALE_BUZZER_HZ
+        int "Buzzer tone, Hz (0 = active buzzer, plain level)"
+        depends on PILLSCALE_PIN_BUZZER >= 0
+        range 0 10000
+        default 2700
+        help
+            A passive buzzer (a coil, like the HC0903) sounds only from a square
+            wave at its resonant frequency — about 2.7 kHz for a 9 mm one, see
+            its datasheet. 0 — an active buzzer with a built-in oscillator:
+            just a high level.
+
+endmenu
