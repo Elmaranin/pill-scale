@@ -31,7 +31,7 @@
 - Сценарии использования, что может пойти не так — [docs/scenarios.md](docs/scenarios.md)
 - Железо и распиновка — [docs/hardware.md](docs/hardware.md)
 - Команды по USB и веб-страница — [docs/api.md](docs/api.md)
-- План по вехам — [docs/roadmap.md](docs/roadmap.md)
+- Что сделано и что осталось — [docs/roadmap.md](docs/roadmap.md)
 - Журнал экспериментов: данные, графики, выводы — [docs/experiments.md](docs/experiments.md)
 
 Код и комментарии — по-английски, документация — по-русски.
