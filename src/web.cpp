@@ -496,11 +496,55 @@ static void url_decode(char *s) {
     *w = '\0';
 }
 
+// "Сброс" on the settings tab: three separate buttons, each asks first.
+// q — the page's query string: done=wifi|log|doses after a reset.
+static void reset_section(httpd_req_t *req, const char *q) {
+    char b[640], ssid[33];
+    bool has_net = wifi_sta_get(ssid, sizeof(ssid));
+    Snapshot s = logbook_snapshot();
+    uint32_t records = logbook_count();
+
+    httpd_resp_sendstr_chunk(req, "<h2>Сброс</h2><style>.rs{display:flex;align-items:center;gap:12px;flex-wrap:wrap;"
+        "margin:10px 0}.rs form{margin:0}.rs button{margin:0;color:#b00;border:1px solid #d33;background:#fff;"
+        "border-radius:6px}.rs button:disabled{color:#999;border-color:#ccc}</style>");
+    if (strstr(q, "done=wifi"))
+        httpd_resp_sendstr_chunk(req, "<p class=ok>Домашняя сеть забыта. Применится после перезагрузки: весы поднимут "
+                                      "свою сеть pillscale, страница — http://192.168.4.1</p>");
+    if (strstr(q, "done=log")) httpd_resp_sendstr_chunk(req, "<p class=ok>Журнал очищен.</p>");
+    if (strstr(q, "done=doses")) httpd_resp_sendstr_chunk(req, "<p class=ok>Выученные дозы забыты.</p>");
+
+    // The question is in data-q: no ASCII quotes inside it, the attribute is single-quoted.
+    snprintf(b, sizeof(b),
+        "<div class=rs><form method=post action='/reset?what=wifi' data-q='Забыть домашнюю сеть %s? После "
+        "перезагрузки весы поднимут свою сеть pillscale (пароль pillscale), страница будет на http://192.168.4.1' "
+        "onsubmit='return confirm(this.dataset.q)'><button%s>Забыть домашнюю сеть</button></form>"
+        "<span class=m>%s</span></div>",
+        has_net ? ssid : "", has_net ? "" : " disabled", has_net ? ssid : "не задана");
+    httpd_resp_sendstr_chunk(req, b);
+    snprintf(b, sizeof(b),
+        "<div class=rs><form method=post action='/reset?what=log' data-q='Удалить весь журнал: %lu записей? "
+        "Это нельзя отменить. Сначала можно скачать CSV на вкладке Журнал.' "
+        "onsubmit='return confirm(this.dataset.q)'><button%s>Очистить журнал</button></form>"
+        "<span class=m>%lu записей · <a href='/log.csv'>скачать CSV</a></span></div>",
+        (unsigned long)records, records ? "" : " disabled", (unsigned long)records);
+    httpd_resp_sendstr_chunk(req, b);
+    snprintf(b, sizeof(b),
+        "<div class=rs><form method=post action='/reset?what=doses' data-q='Забыть выученные дозы (видов: %u)? "
+        "Весы выучат новые по следующим приёмам. Расписание и журнал останутся.' "
+        "onsubmit='return confirm(this.dataset.q)'><button%s>Забыть выученные дозы</button></form>"
+        "<span class=m>видов: %u — нужно, когда сменили лекарства</span></div>",
+        s.kinds, s.kinds ? "" : " disabled", s.kinds);
+    httpd_resp_sendstr_chunk(req, b);
+    httpd_resp_sendstr_chunk(req, "<p class=m>Перед демонстрацией удобно очистить журнал и забыть дозы. "
+                                  "Калибровка здесь не сбрасывается — её делает сборщик по USB.</p>");
+}
+
 static esp_err_t settings_page(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     head(req, "/settings");
-    char b[512], q[32];
-    bool saved = httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK && strstr(q, "saved");
+    char b[512], q[32] = "";
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK) q[0] = '\0';
+    bool saved = strstr(q, "saved") != nullptr;
 
     NetInfo n;
     wifi_info(n);
@@ -527,6 +571,7 @@ static esp_err_t settings_page(httpd_req_t *req) {
              "<button type=button onclick=\"if(confirm('Перезагрузить весы?'))fetch('/reboot',{method:'POST'})"
              ".then(function(){document.getElementById('r').textContent='Перезагружаются… ~10 с'})\">"
              "Перезагрузить</button> <span id=r class=m></span></form>");
+    reset_section(req, q);
     httpd_resp_sendstr_chunk(req, "</body></html>");
     return httpd_resp_sendstr_chunk(req, nullptr);
 }
@@ -550,6 +595,28 @@ static esp_err_t settings_save(httpd_req_t *req) {
     if (!wifi_sta_set(ssid, pass)) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "ssid<=32, pass<=63"); return ESP_FAIL; }
     httpd_resp_set_status(req, "303 See Other");
     httpd_resp_set_hdr(req, "Location", "/settings?saved=1");
+    return httpd_resp_sendstr(req, "");
+}
+
+// POST /reset?what=wifi|log|doses — the "Сброс" buttons (the page asked first).
+static esp_err_t reset(httpd_req_t *req) {
+    char q[32], what[8] = "";
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) httpd_query_key_value(q, "what", what, sizeof(what));
+    if (!strcmp(what, "wifi")) {
+        if (!wifi_sta_set("", "")) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs"); return ESP_FAIL; }
+    } else if (!strcmp(what, "log")) {
+        // erases the whole partition: a couple of seconds, the main loop may wait on the mutex meanwhile
+        if (!logbook_clear()) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "flash"); return ESP_FAIL; }
+    } else if (!strcmp(what, "doses")) {
+        logbook_request_doses_reset();  // the main loop owns the doses
+    } else {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "what=wifi|log|doses");
+        return ESP_FAIL;
+    }
+    char loc[40];
+    snprintf(loc, sizeof(loc), "/settings?done=%s", what);
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", loc);
     return httpd_resp_sendstr(req, "");
 }
 
@@ -826,6 +893,7 @@ bool web_begin() {
         {"/schedule", HTTP_GET, schedule_page, nullptr},
         {"/schedule", HTTP_POST, schedule_save, nullptr},
         {"/reboot", HTTP_POST, reboot, nullptr},
+        {"/reset", HTTP_POST, reset, nullptr},
     };
     for (const httpd_uri_t &u : uris) httpd_register_uri_handler(server, &u);
     running = true;

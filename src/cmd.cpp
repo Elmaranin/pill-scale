@@ -35,6 +35,13 @@ static bool parse_n(const char *s, int def, int &out) {
 
 void CommandLine::poll() {
     read_input();
+    if (logbook_take_doses_reset()) {  // asked from the web page ("Настройки" → "Сброс")
+        doses_.clear();
+        doses_loaded_ = true;
+        save_doses();
+        if (tracking_) snapshot();  // the page shows "no doses" right away
+        puts("# doses reset from the web page");
+    }
     if (!scale_.cell().ready()) return;
 
     // The ADC sample is read once and handed to everyone who needs it.

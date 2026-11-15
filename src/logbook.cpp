@@ -161,3 +161,17 @@ Live logbook_live() {
     Lock l;
     return live;
 }
+
+static bool doses_reset = false;
+
+void logbook_request_doses_reset() {
+    Lock l;
+    doses_reset = true;
+}
+
+bool logbook_take_doses_reset() {
+    Lock l;
+    bool r = doses_reset;
+    doses_reset = false;
+    return r;
+}

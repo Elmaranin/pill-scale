@@ -54,3 +54,8 @@ struct Live {
 };
 void logbook_set_live(const Live &l);
 Live logbook_live();
+
+// "Forget learned doses" from the web page. The doses belong to the main loop
+// (CommandLine), so the web task only leaves a request; the main loop takes it.
+void logbook_request_doses_reset();
+bool logbook_take_doses_reset();  // true once per request
