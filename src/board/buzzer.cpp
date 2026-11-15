@@ -18,7 +18,10 @@ static const ledc_timer_bit_t RES = LEDC_TIMER_10_BIT;  // 1024 steps, 50% = 512
 
 static bool have = false;
 static bool sounding = false;
-static int64_t off_at_us = 0;
+static int64_t off_at_us = 0;   // sounding: when to stop
+static int64_t on_at_us = 0;    // a series: when the next beep starts
+static int left = 0;            // beeps still to play after the current one
+static uint32_t ser_on = 0, ser_off = 0;
 
 static void drive(bool on) {
     if (HZ > 0) {
@@ -67,8 +70,24 @@ void buzzer_beep(uint32_t ms, uint32_t hz) {
     if (!sounding) { drive(true); sounding = true; }
 }
 
+// A series of equal beeps; a new series replaces the one still playing.
+void buzzer_beeps(int count, uint32_t on_ms, uint32_t off_ms) {
+    if (!have || count < 1) return;
+    left = count - 1;
+    ser_on = on_ms;
+    ser_off = off_ms;
+    buzzer_beep(on_ms, 0);
+}
+
 void buzzer_poll() {
-    if (!sounding || esp_timer_get_time() < off_at_us) return;
-    drive(false);
-    sounding = false;
+    int64_t now = esp_timer_get_time();
+    if (sounding) {
+        if (now < off_at_us) return;
+        drive(false);
+        sounding = false;
+        if (left > 0) on_at_us = now + (int64_t)ser_off * 1000;
+    } else if (left > 0 && now >= on_at_us) {
+        left--;
+        buzzer_beep(ser_on, 0);
+    }
 }

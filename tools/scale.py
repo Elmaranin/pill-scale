@@ -7,6 +7,7 @@ Examples:
     python tools/scale.py cmd tare
     python tools/scale.py cmd cal 100.00
     python tools/scale.py cmd read 50
+    python tools/scale.py cmd schedule add 08:00   # dose schedule, see docs/api.md
     python tools/scale.py log --minutes 10 --note "empty platform"
     python tools/scale.py creep 1             # experiment B1 (creep), with prompts and the buzzer
     python tools/scale.py creep 1 --speed 10  # rehearsal: the same scenario 10x faster

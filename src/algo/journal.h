@@ -43,12 +43,32 @@ public:
     enum Type : uint8_t {
         BOOT = 1, TIMESET, PLACED, REMOVED, MISSING,
         NONE, DOSE, DOUBLE, REFILL, NEWBOX, UNSURE, STATUS,
+        MISSED,  // a schedule window closed without a dose
     };
 
     static const char *name(uint8_t t) {
         static const char *n[] = {"?", "boot", "time", "placed", "removed", "missing",
-                                  "none", "dose", "double", "refill", "newbox", "unsure", "status"};
+                                  "none", "dose", "double", "refill", "newbox", "unsure", "status",
+                                  "missed"};
         return t < sizeof(n) / sizeof(n[0]) ? n[t] : "?";
+    }
+
+    // The record has no spare byte, so the schedule verdict shares Record::kind
+    // with the dose kind: bits 0-2 dose kind (0-7), bits 3-4 schedule status,
+    // bits 5-7 schedule slot (1-4, 0 none). Records written before the schedule
+    // existed have kind 0-4 and read back as "no status".
+    enum Sched : uint8_t { S_NONE = 0, S_ON = 1, S_EXTRA = 2, S_OFF = 3 };
+
+    static uint8_t pack(uint8_t dose_kind, uint8_t sched, uint8_t slot) {
+        return (uint8_t)((dose_kind & 7) | ((sched & 3) << 3) | ((slot & 7) << 5));
+    }
+    static uint8_t dose_kind(uint8_t kind) { return kind & 7; }
+    static uint8_t sched(uint8_t kind) { return (kind >> 3) & 3; }
+    static uint8_t slot(uint8_t kind) { return kind >> 5; }
+
+    static const char *sched_name(uint8_t s) {
+        static const char *n[] = {"", "on", "extra", "off"};
+        return n[s & 3];
     }
 
     explicit Journal(Flash &f) : f_(f) {}

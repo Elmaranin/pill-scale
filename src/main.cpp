@@ -13,6 +13,7 @@
 #include "scale.h"
 #include "cmd.h"
 #include "logbook.h"
+#include "sched.h"
 #include "web.h"
 #include "board/wifi.h"
 #include "board/led.h"
@@ -40,10 +41,13 @@ static void apply_ntp() {
     if (!logbook_time_known() || llabs(have - (int64_t)unix) > 2) logbook_set_time(unix, logbook_tz());
 }
 
-// LED: time known — steady on; unknown — blinks once a second.
-// Without time the schedule cannot fire, and that must be visible without a phone.
+// LED: time known — steady on; unknown — blinks once a second; a dose is due —
+// blinks fast. Without time the schedule cannot fire, and that must be visible
+// without a phone.
 static void indicate(uint32_t ms) {
-    led_set(logbook_time_known() || (ms % 1000) < 500);
+    if (!logbook_time_known()) led_set((ms % 1000) < 500);
+    else if (sched_due()) led_set((ms % 300) < 150);
+    else led_set(true);
 }
 
 static void nvs_begin() {
@@ -59,6 +63,7 @@ static void nvs_begin() {
 extern "C" void app_main() {
     nvs_begin();
     logbook_begin();  // journal in flash: writes a "boot" record
+    sched_begin();    // dose schedule from NVS
     console_begin();
     led_begin();
     buzzer_begin();
@@ -74,6 +79,7 @@ extern "C" void app_main() {
         cmdline.begin_tracking();  // the tracker and the journal work without a computer
     }
     if (!logbook_ok()) printf("# WARN: no 'log' partition — flash with the new partitions.csv\n");
+    if (sched_refused()) printf("# WARN: saved schedule refused (windows overlap or out of range) — set it again\n");
 
 #if CONFIG_PILLSCALE_WIFI_AP
     // Network in its own task: home network (if configured, up to 30 s) or own AP.
@@ -86,6 +92,7 @@ extern "C" void app_main() {
         cmdline.poll();
         buzzer_poll();
         apply_ntp();
+        sched_poll();  // once a minute: reminders, "missed" records
         indicate(now_ms());
         vTaskDelay(1);  // 1 ms: yield to USB and the watchdog
     }

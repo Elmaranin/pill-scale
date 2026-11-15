@@ -9,6 +9,7 @@
 #include "nvs.h"
 #include "cmd.h"
 #include "logbook.h"
+#include "sched.h"
 #include "web.h"
 #include "board/wifi.h"
 #include "board/buzzer.h"
@@ -57,6 +58,15 @@ void CommandLine::judge(uint16_t off_s) {
     double d = tracker_.delta();
     DoseBook::Result r = doses_.classify(d, tracker_.before());
     uint8_t type = Journal::NONE;
+    // Schedule verdict for a dose (and a double): with the clock unknown — none.
+    Schedule::Dose sd = {Schedule::NO_SCHEDULE, 0};
+    char tail[32] = "";
+    if (r.v == DoseBook::DOSE || r.v == DoseBook::DOUBLE) {
+        sd = sched_dose();
+        if (sd.status != Schedule::NO_SCHEDULE)
+            snprintf(tail, sizeof(tail), " slot=%d sched=%s", sd.slot,
+                     Journal::sched_name(sched_to_journal(sd.status)));
+    }
     switch (r.v) {
     case DoseBook::NONE:
         type = Journal::NONE;
@@ -72,16 +82,17 @@ void CommandLine::judge(uint16_t off_s) {
         break;
     case DoseBook::DOUBLE:
         type = Journal::DOUBLE;
-        if (print_events_) printf("E double kind=%d g=%.3f\n", r.kind, -d);
+        if (print_events_) printf("E double kind=%d g=%.3f%s\n", r.kind, -d, tail);
         break;
     case DoseBook::DOSE:
         type = Journal::DOSE;
         if (print_events_)
-            printf("E dose kind=%d n=%d g=%.3f%s\n", r.kind, r.count, -d, r.fresh ? " new" : "");
+            printf("E dose kind=%d n=%d g=%.3f%s%s\n", r.kind, r.count, -d, r.fresh ? " new" : "", tail);
         save_doses();  // a kind was updated or added — persist to NVS (a couple of times a day)
         break;
     }
-    logbook_add(type, (uint8_t)r.kind, off_s, (float)d, g);
+    logbook_add(type, Journal::pack((uint8_t)r.kind, sched_to_journal(sd.status), (uint8_t)sd.slot),
+                off_s, (float)d, g);
 }
 
 // Learned doses in NVS: namespace "doses", key "book" — the struct as is.
@@ -115,6 +126,7 @@ void CommandLine::track(int32_t raw) {
         break;
     case LiftTracker::REMOVED:
         removed_ms_ = now;
+        sched_lift();  // the person is at the scale: hold the reminder
         if (print_events_) printf("E removed g=%.3f\n", tracker_.before());
         logbook_add(Journal::REMOVED, 0, 0, 0, (float)tracker_.before());
         break;
@@ -169,6 +181,8 @@ void CommandLine::snapshot() {
     sn.weight = (float)tracker_.level();
     sn.box = (float)tracker_.box();
     sn.box_on = tracker_.box_on();
+    if (!sn.box_on && removed_ms_)
+        sn.off_s = ((uint32_t)(esp_timer_get_time() / 1000) - removed_ms_) / 1000;
     sn.calibrated = scale_.scale() != 1.0f;
     const DoseBook::State &st = doses_.state();
     sn.kinds = st.n;
@@ -227,10 +241,60 @@ void CommandLine::read_input() {
     }
 }
 
+// "OK n=2 window=30/60 1=08:00 2=20:00"
+void CommandLine::print_schedule() {
+    Schedule::State st = sched_state();
+    printf("OK n=%u window=%u/%u", st.n, st.before, st.after);
+    for (int i = 0; i < st.n; i++) printf(" %d=%02u:%02u", i + 1, st.minute[i] / 60, st.minute[i] % 60);
+    printf("\n");
+}
+
+// "HH:MM" → minutes after midnight; false — not a time.
+static bool parse_hhmm(const char *s, uint16_t &out) {
+    if (!s) return false;
+    int h, m;
+    char rest;
+    if (sscanf(s, "%d:%d%c", &h, &m, &rest) != 2 || h < 0 || h > 23 || m < 0 || m > 59) return false;
+    out = (uint16_t)(h * 60 + m);
+    return true;
+}
+
+// schedule | add HH:MM | del n | window before after | clear (docs/api.md)
+void CommandLine::schedule_cmd(const char *sub, const char *a, const char *b) {
+    if (!sub) { print_schedule(); return; }
+    if (!strcasecmp(sub, "add")) {
+        uint16_t minute;
+        if (!parse_hhmm(a, minute)) { puts("ERR bad_argument"); return; }
+        Schedule::State t = sched_state();  // try on a copy to tell why it is refused
+        if (t.n >= Schedule::MAX_SLOTS) { puts("ERR full"); return; }
+        if (!Schedule::insert(t, minute)) { puts("ERR bad_argument"); return; }  // already there
+        if (Schedule::overlap(t)) { puts("ERR overlap"); return; }
+        if (!sched_add(minute)) { puts("ERR bad_argument"); return; }
+    } else if (!strcasecmp(sub, "del")) {
+        if (!a || !sched_del(atoi(a))) { puts("ERR bad_argument"); return; }
+    } else if (!strcasecmp(sub, "window")) {
+        if (!a || !b) { puts("ERR bad_argument"); return; }
+        int before = atoi(a), after = atoi(b);
+        if (before < 0 || before > 720 || after < 0 || after > 720) { puts("ERR bad_argument"); return; }
+        Schedule::State t = sched_state();
+        t.before = (uint16_t)before;
+        t.after = (uint16_t)after;
+        if (Schedule::overlap(t)) { puts("ERR overlap"); return; }
+        if (!sched_window(before, after)) { puts("ERR bad_argument"); return; }
+    } else if (!strcasecmp(sub, "clear")) {
+        sched_clear();
+    } else {
+        puts("ERR bad_argument");
+        return;
+    }
+    print_schedule();
+}
+
 void CommandLine::execute(char *line) {
     char *cmd = strtok(line, " \t");
     char *a1 = strtok(nullptr, " \t");
     char *a2 = strtok(nullptr, " \t");
+    char *a3 = strtok(nullptr, " \t");
     if (!cmd) return;
     // Commands are lowercase; input in any case is folded to lowercase.
     for (char *p = cmd; *p; p++) *p = (char)tolower(*p);
@@ -316,9 +380,11 @@ void CommandLine::execute(char *line) {
             if (scale_.scale() == 1.0f) { puts("ERR not_calibrated"); return; }
             begin_tracking();  // usually already running since power-on
             print_events_ = true;
+            sched_print_events(true);
             puts("OK event=on");
         } else if (!strcmp(a1, "off")) {
             print_events_ = false;  // the tracker and the journal keep running
+            sched_print_events(false);
             puts("OK event=off");
         } else {
             puts("ERR bad_argument");
@@ -354,7 +420,9 @@ void CommandLine::execute(char *line) {
             logbook_format_time(r, t, sizeof(t));
             printf("L %lu boot=%lu up=%lu t=%s %s", (unsigned long)r.seq, (unsigned long)r.boot,
                    (unsigned long)r.uptime_s, t, Journal::name(r.type));
-            if (r.kind) printf(" kind=%u", r.kind);
+            if (Journal::dose_kind(r.kind)) printf(" kind=%u", Journal::dose_kind(r.kind));
+            if (Journal::slot(r.kind)) printf(" slot=%u", Journal::slot(r.kind));
+            if (Journal::sched(r.kind)) printf(" sched=%s", Journal::sched_name(Journal::sched(r.kind)));
             if (r.off_s) printf(" off=%u", r.off_s);
             if (r.delta != 0) printf(" d=%.3f", r.delta);
             printf(" g=%.3f\n", r.weight);
@@ -403,6 +471,9 @@ void CommandLine::execute(char *line) {
         vTaskDelay(pdMS_TO_TICKS(100));  // let the line leave over USB
 
         esp_restart();
+
+    } else if (!strcmp(cmd, "schedule")) {
+        schedule_cmd(a1, a2, a3);
 
     } else if (!strcmp(cmd, "doses")) {
         if (!doses_loaded_) load_doses();

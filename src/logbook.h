@@ -25,12 +25,14 @@ uint32_t logbook_uptime_s();
 
 // Local time of a record, "2026-10-25T08:05:12", or "-" if unknown.
 void logbook_format_time(const Record &r, char *buf, size_t n);
+uint32_t logbook_record_utc(const Record &r);  // its own or recovered (BootClock); 0 — unknown
 
 // State snapshot for the web page: updated by the main loop.
 struct Snapshot {
     float weight = 0;      // weight on the platform, g
     float box = 0;         // box weight, g
     bool box_on = false;
+    uint32_t off_s = 0;    // the box is away: for how many seconds (0 — never lifted this power-on)
     bool calibrated = false;
     uint8_t kinds = 0;     // learned dose kinds
     float kind_g[4] = {};

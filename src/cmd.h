@@ -25,6 +25,8 @@ private:
     void track(int32_t raw);
     void live(int32_t raw);      // current weight for the "Scale" tab
     void judge(uint16_t off_s);  // classify returned/changed by learned doses → journal
+    void schedule_cmd(const char *sub, const char *a, const char *b);
+    void print_schedule();
     void snapshot();             // state for the web page
     void load_doses();
     void save_doses();

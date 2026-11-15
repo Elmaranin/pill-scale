@@ -24,10 +24,16 @@ static int tz_min = 180;          // Moscow by default
 static Snapshot snap;
 static Live live;
 
+// In an anonymous namespace: logbook.cpp and sched.cpp each have their own
+// Lock over their own mutex. Without it both are the same ::Lock to the
+// linker, which keeps one copy of the inline methods — and one file silently
+// locks the other's mutex (the main loop hung once the clock became known).
+namespace {
 struct Lock {
     Lock() { xSemaphoreTake(mtx, portMAX_DELAY); }
     ~Lock() { xSemaphoreGive(mtx); }
 };
+}  // namespace
 
 uint32_t logbook_uptime_s() { return (uint32_t)(esp_timer_get_time() / 1000000); }
 
@@ -120,15 +126,15 @@ void logbook_set_time(uint32_t unix, int tz) {
     logbook_add(Journal::TIMESET);
 }
 
-void logbook_format_time(const Record &r, char *buf, size_t n) {
-    // Record time: its own if known at write time; otherwise derived from a record
-    // of the same power-on written after the time was set (BootClock); otherwise unknown.
+// Record time: its own if known at write time; otherwise derived from a record
+// of the same power-on written after the time was set (BootClock); otherwise unknown.
+uint32_t logbook_record_utc(const Record &r) {
+    Lock l;
+    return clock_.utc(r);
+}
 
-    int64_t t;
-    {
-        Lock l;
-        t = clock_.utc(r);
-    }
+void logbook_format_time(const Record &r, char *buf, size_t n) {
+    int64_t t = logbook_record_utc(r);
     if (!t) { snprintf(buf, n, "-"); return; }
     time_t local = (time_t)(t + tz_min * 60);
     struct tm tm;

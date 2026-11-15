@@ -1,7 +1,7 @@
 # Firmware component. The ADC driver is one *_cell.cpp behind the LoadCell
 # interface (include/load_cell.h); another ADC means another driver file, not
 # an if in the logic.
-set(srcs main.cpp cmd.cpp scale.cpp logbook.cpp web.cpp
+set(srcs main.cpp cmd.cpp scale.cpp logbook.cpp sched.cpp web.cpp
          board/usb_console.cpp board/flash_partition.cpp board/wifi.cpp
          board/led.cpp board/buzzer.cpp board/hx711_cell.cpp)
 
