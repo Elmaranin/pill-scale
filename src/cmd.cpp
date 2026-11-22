@@ -42,6 +42,7 @@ void CommandLine::poll() {
         if (tracking_) snapshot();  // the page shows "no doses" right away
         puts("# doses reset from the web page");
     }
+    live_block_.configure(logbook_live().samples, (uint32_t)(esp_timer_get_time() / 1000));
     if (!scale_.cell().ready()) return;
 
     // The ADC sample is read once and handed to everyone who needs it.
@@ -164,22 +165,21 @@ void CommandLine::track(int32_t raw) {
     if (++snap_n_ >= 10) { snap_n_ = 0; snapshot(); }  // ~once a second
 }
 
-// Mean of the last LIVE_N samples — for the "Scale" tab. Does not touch the
-// tracker or the journal: they have their own ~1 s blocks.
+// The Scale tab uses its own blocks, independent of the tracker and journal.
 void CommandLine::live(int32_t raw) {
-    live_raw_[live_i_] = raw;
-    live_i_ = (live_i_ + 1) % LIVE_N;
-    if (live_n_ < LIVE_N) live_n_++;
-    RunningStats s;
-    for (int i = 0; i < live_n_; i++) s.add(live_raw_[i]);
     Live l;
+    l.samples = live_block_.samples();
+    live_block_.add(raw, (uint32_t)(esp_timer_get_time() / 1000));
+    const RunningStats &s = live_block_.result();
     l.calibrated = scale_.scale() != 1.0f;
     l.raw = raw;
     l.offset = scale_.offset();
     l.scale = scale_.scale();
-    l.g = scale_.to_grams(s.mean());
+    l.g = s.count() ? scale_.to_grams(s.mean()) : 0;
     l.sd = (float)(s.sd() / fabs(scale_.scale()));
-    l.n = (uint8_t)live_n_;
+    l.n = (uint8_t)s.count();
+    l.collected = (uint8_t)live_block_.collected();
+    l.duration_ms = live_block_.duration_ms();
     logbook_set_live(l);
 }
 

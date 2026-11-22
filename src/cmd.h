@@ -3,6 +3,7 @@
 #include "algo/step_detector.h"
 #include "algo/lift_tracker.h"
 #include "algo/dose_book.h"
+#include "algo/sample_block.h"
 
 // Text protocol over USB. Description: docs/api.md.
 // Changes go in this order: the document, then the code, then tools/scale.py.
@@ -51,8 +52,6 @@ private:
     uint32_t removed_ms_ = 0; // when the box was removed — for off_s
     DoseBook doses_;          // learned dose kinds, stored in NVS
 
-    static const int LIVE_N = 8;  // samples averaged for the "Scale" tab (~0.7 s)
-    int32_t live_raw_[LIVE_N] = {};
-    int live_i_ = 0, live_n_ = 0;
+    SampleBlock live_block_;
     bool doses_loaded_ = false;
 };

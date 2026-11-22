@@ -47,13 +47,18 @@ struct Live {
     int32_t raw = 0;     // last raw ADC sample
     int32_t offset = 0;  // calibration zero
     float scale = 1;     // counts per gram
-    float g = 0;         // mean of the last n samples, g
+    float g = 0;         // This is the mean weight of the last complete block, in grams.
     float sd = 0;        // spread of those samples, g
 
     uint8_t n = 0;
+    uint8_t samples = 10;
+    uint8_t collected = 0;
+    uint32_t duration_ms = 0;
 };
 void logbook_set_live(const Live &l);
 Live logbook_live();
+// This setting affects only the Scale tab and resets its displayed measurement.
+bool logbook_set_live_samples(int n);
 
 // "Forget learned doses" from the web page. The doses belong to the main loop
 // (CommandLine), so the web task only leaves a request; the main loop takes it.

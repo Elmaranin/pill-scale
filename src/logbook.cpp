@@ -6,6 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "logbook.h"
+#include "algo/sample_block.h"
 #include "nvs.h"
 
 // NVS: namespace "logbook" — power-on counter and time zone.
@@ -154,12 +155,26 @@ Snapshot logbook_snapshot() {
 
 void logbook_set_live(const Live &v) {
     Lock l;
+    if (v.samples != live.samples) return;
     live = v;
 }
 
 Live logbook_live() {
     Lock l;
     return live;
+}
+
+bool logbook_set_live_samples(int n) {
+    if (!SampleBlock::valid_size(n)) return false;
+    Lock l;
+    if (live.samples == n) return true;
+    live.samples = (uint8_t)n;
+    live.n = 0;
+    live.collected = 0;
+    live.g = 0;
+    live.sd = 0;
+    live.duration_ms = 0;
+    return true;
 }
 
 static bool doses_reset = false;

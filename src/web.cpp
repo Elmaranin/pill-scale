@@ -810,15 +810,33 @@ static float tare_g = 0;
 
 static esp_err_t live_json(httpd_req_t *req) {
     Live l = logbook_live();
-    char b[256];
+    char b[384];
     snprintf(b, sizeof(b),
              "{\"calibrated\":%s,\"raw\":%ld,\"offset\":%ld,\"scale\":%.2f,\"g\":%.3f,\"tare\":%.3f,"
-             "\"net\":%.3f,\"sd\":%.4f,\"stable\":%s,\"n\":%u}",
+             "\"net\":%.3f,\"sd\":%.4f,\"stable\":%s,\"n\":%u,"
+             "\"samples\":%u,\"collected\":%u,\"duration_ms\":%lu}",
              l.calibrated ? "true" : "false", (long)l.raw, (long)l.offset, l.scale, l.g, tare_g,
-             l.g - tare_g, l.sd, l.n >= 4 && l.sd < 0.03f ? "true" : "false", l.n);
+             l.g - tare_g, l.sd, l.n >= 4 && l.sd < 0.03f ? "true" : "false", l.n,
+             l.samples, l.collected, (unsigned long)l.duration_ms);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_sendstr(req, b);
+}
+
+static esp_err_t scale_average(httpd_req_t *req) {
+    char q[48], v[12];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK ||
+        httpd_query_key_value(q, "n", v, sizeof(v)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "expected n=1,5,10,15,30,50");
+        return ESP_FAIL;
+    }
+    char *end;
+    long n = strtol(v, &end, 10);
+    if (end == v || *end || n < 1 || n > 50 || !logbook_set_live_samples((int)n)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "expected n=1,5,10,15,30,50");
+        return ESP_FAIL;
+    }
+    return httpd_resp_sendstr(req, "OK");
 }
 
 static esp_err_t tare(httpd_req_t *req) {
@@ -839,30 +857,55 @@ static esp_err_t scale_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req,
         "<style>.big{font-size:72px;font-weight:600;font-variant-numeric:tabular-nums;margin:28px 0 4px;"
         "white-space:nowrap}.big small{font-size:32px;font-weight:400}"
+        "#avg{font-size:18px;padding:8px;min-width:90px}"
         ".tare{font-size:22px;padding:14px 40px;margin:16px 0 8px}"
         ".raw{font-size:12px;color:#666;font-family:ui-monospace,monospace;margin-top:28px;line-height:1.5;"
         "overflow-wrap:anywhere}</style>"
-        "<div id=w class=big>—</div><div id=st class=m>&nbsp;</div>"
-        "<button class=tare onclick=tare()>Тара</button> <span id=t class=m></span>"
+        "<label for=avg>Усреднение · отсчётов в блоке</label>"
+        "<select id=avg onchange=average()><option>1</option><option>5</option>"
+        "<option selected>10</option><option>15</option><option>30</option><option>50</option></select>"
+        "<div id=w class=big>—</div><div id=st class=m role=status>&nbsp;</div>"
+        "<button id=tare class=tare onclick=tare() disabled>Тара</button> <span id=t class=m></span>"
+        "<div class=card><div id=stats>SD отсчётов: — · оценка SD среднего: —</div>"
+        "<div id=block class=m>Собираем блок…</div></div>"
+        "<p class=m style='font-size:12px'>Больше отсчётов — медленнее обновление веса. "
+        "Оценка SD среднего = SD / √n для независимого шума; корреляция и дрейф могут увеличить разброс.</p>"
         "<div id=raw class=raw></div>"
         "<p class=m style='font-size:12px'>Тара — только на экране: калибровку, автомат и журнал не меняет. "
         "Дрейф здесь не вычитается: при смене температуры показание может немного уплыть.</p>"
         "<script>"
-        "var busy=0;function $(i){return document.getElementById(i)}"
+        "var busy=0,changing=0,version=0;function $(i){return document.getElementById(i)}"
         "function f(x,k){return x.toFixed(k).replace('.',',')}"
-        "function upd(){if(busy)return;busy=1;"
-        "fetch('/live.json').then(function(r){return r.json()}).then(function(d){busy=0;"
+        "function upd(){if(busy||changing)return;busy=1;var requestVersion=version;"
+        "fetch('/live.json').then(function(r){if(!r.ok)throw Error();return r.json()}).then(function(d){busy=0;"
+        "if(changing||requestVersion!==version)return;"
+        "$('avg').value=d.samples;$('tare').disabled=!d.calibrated||!d.n;"
+        "$('st').className='m';"
         "if(!d.calibrated){$('w').textContent='—';$('st').textContent='Весы не откалиброваны: tare и cal по USB';$('t').textContent='';}"
+        "else if(!d.n){$('w').textContent='—';$('st').textContent='Собираем первый блок…';$('t').textContent='';}"
         "else{var v=d.net;if(Math.abs(v)<0.005)v=0;$('w').innerHTML=f(v,2)+' <small>г</small>';"
-        "$('st').textContent=d.stable?'● стабильно':'○ вес меняется';$('st').className=d.stable?'ok':'m';"
+        "$('st').textContent=d.n===1?'Один отсчёт: стабильность не оценена':d.stable?'● стабильно':'○ вес меняется';"
+        "$('st').className=d.stable?'ok':'m';"
         "$('t').textContent=Math.abs(d.tare)>0.0005?'тара '+f(d.tare,2)+' г, брутто '+f(d.g,2)+' г':'';}"
+        "$('stats').textContent='SD отсчётов: '+(d.calibrated&&d.n>1?f(d.sd*1000,1)+' мг':'—')"
+        "+' · оценка SD среднего: '+(d.calibrated&&d.n>1?f(d.sd*1000/Math.sqrt(d.n),1)+' мг':'—');"
+        "$('block').textContent='Следующий блок: '+d.collected+' / '+d.samples+' отсчётов'"
+        "+(d.n?' · время измерения: '+f(d.duration_ms/1000,2)+' с':' · время измерения: —');"
         "var one=d.calibrated?' = '+f((d.raw-d.offset)/d.scale,3)+' г':'';"
         "$('raw').innerHTML='АЦП, последний отсчёт: <b>'+d.raw+'</b><br>'"
         "+'ноль калибровки: '+d.offset+' · отсчётов на грамм: '+f(d.scale,2)+'<br>'"
         "+'г = (отсчёт − ноль) / отсчётов на грамм = ('+d.raw+' − ('+d.offset+')) / '+f(d.scale,2)+one+'<br>'"
-        "+'на экране — среднее '+d.n+' отсчётов, разброс '+f(d.sd*1000,1)+' мг';"
-        "}).catch(function(){busy=0;$('st').textContent='нет связи с весами';$('st').className='m'})}"
-        "function tare(){fetch('/tare',{method:'POST'}).then(upd)}"
+        "+(d.n?'на экране — среднее полного блока из '+d.n+' отсчётов':'первый блок ещё не собран');"
+        "}).catch(function(){busy=0;if(!changing&&requestVersion===version){$('st').textContent='нет связи с весами';$('st').className='m';$('tare').disabled=true}})}"
+        "function average(){version++;changing=1;$('avg').disabled=true;$('tare').disabled=true;"
+        "$('w').textContent='—';$('st').textContent='Меняем усреднение…';$('st').className='m';"
+        "$('t').textContent='';$('stats').textContent='SD отсчётов: — · оценка SD среднего: —';"
+        "$('block').textContent='Собираем новый блок…';"
+        "fetch('/scale/average?n='+$('avg').value,{method:'POST'}).then(function(r){if(!r.ok)throw Error();"
+        "changing=0;$('avg').disabled=false;upd()}).catch(function(){changing=0;$('avg').disabled=false;"
+        "$('st').textContent='Не удалось изменить усреднение';$('st').className='m'})}"
+        "function tare(){fetch('/tare',{method:'POST'}).then(function(r){if(!r.ok)throw Error();upd()})"
+        ".catch(function(){$('st').textContent='Не удалось установить тару';$('st').className='m'})}"
         "setInterval(upd,250);upd();"
         "</script></body></html>");
     return httpd_resp_sendstr_chunk(req, nullptr);
@@ -887,6 +930,7 @@ bool web_begin() {
         {"/time", HTTP_POST, set_time, nullptr},
         {"/scale", HTTP_GET, scale_page, nullptr},
         {"/live.json", HTTP_GET, live_json, nullptr},
+        {"/scale/average", HTTP_POST, scale_average, nullptr},
         {"/tare", HTTP_POST, tare, nullptr},
         {"/settings", HTTP_GET, settings_page, nullptr},
         {"/settings", HTTP_POST, settings_save, nullptr},
